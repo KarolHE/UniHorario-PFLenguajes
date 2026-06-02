@@ -216,3 +216,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+cat >> .gitignore << 'EOF'
+
+# Scala / sbt
+target/
+project/target/
+project/project/
+*.class
+*.jar
+
+# Prolog
+*.qlf
+
+# Data generada
+data/salida/*
+!data/salida/.gitkeep
+EOF
