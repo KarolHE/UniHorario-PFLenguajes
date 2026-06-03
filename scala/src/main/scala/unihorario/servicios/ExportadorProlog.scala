@@ -54,8 +54,8 @@ object ExportadorProlog {
       curso.secciones.foreach { seccion =>
         hechos += s"seccion('${seccion.codigo}', '$cursoId', '${seccion.docente}')."
         seccion.bloques.foreach { bloque =>
-          val inicioMin = bloque.horaInicio.replace(":", "")
-          val finMin    = bloque.horaFin.replace(":", "")
+          val inicioMin = bloque.horaInicio.replace(":", "").toInt
+          val finMin    = bloque.horaFin.replace(":", "").toInt
           hechos += s"horario('${seccion.codigo}', ${bloque.dia.toLowerCase}, $inicioMin, $finMin)."
         }
       }
