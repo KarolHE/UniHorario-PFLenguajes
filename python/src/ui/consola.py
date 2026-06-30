@@ -1,3 +1,9 @@
+import sys, os as _os
+_motor = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "motor"))
+if _motor not in sys.path:
+    sys.path.insert(0, _motor)
+from rankeador import (cargar_preferencias, guardar_preferencias,
+                       DIAS_SEMANA, TURNOS)
 import tkinter as tk
 from tkinter import ttk, messagebox, font
 import json
@@ -172,10 +178,12 @@ class UniHorarioApp(tk.Tk):
         # Menú
         self._nav_btns = {}
         nav_items = [
-            ("🏠  Inicio",       "inicio"),
-            ("📚  Mis Cursos",   "cursos"),
-            ("📅  Ver Horario",  "horario"),
-            ("🕐  Historial",    "historial"),
+            ("🏠  Inicio",         "inicio"),
+            ("📚  Mis Cursos",     "cursos"),
+            ("📅  Ver Horario",    "horario"),
+            ("📊  Tabla Semanal",  "tabla"),
+            ("⚙️  Preferencias",   "preferencias"),
+            ("🕐  Historial",      "historial"),
         ]
         menu_frame = tk.Frame(sb, bg=C_BLACK)
         menu_frame.pack(fill="both", expand=True, pady=(16, 0))
@@ -217,6 +225,10 @@ class UniHorarioApp(tk.Tk):
             PantallaHorario(self.contenedor, self)
         elif pantalla == "historial":
             PantallaHistorial(self.contenedor, self)
+        elif pantalla == "tabla":
+            PantallaTabla(self.contenedor, self)
+        elif pantalla == "preferencias":
+            PantallaPreferencias(self.contenedor, self)
 
     def guardar_cursos(self):
         guardar_json(DATA_FILE, self.cursos)
@@ -742,6 +754,412 @@ class PantallaHistorial(tk.Frame):
             BotonUTP(btn_row, "🗑 Eliminar", eliminar,
                      ancho=110, alto=30, color=C_GRAY2, bg=C_GRAY).pack(side="left", padx=4)
 
+
+
+# ─────────────────────────────────────────────
+#  PANTALLA: TABLA SEMANAL  (Mejora 1 - Avance 2)
+# ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+#  PANTALLA: PREFERENCIAS DE RANKEADOR  (Mejora 2 - Avance 2)
+# ─────────────────────────────────────────────
+class PantallaPreferencias(tk.Frame):
+    """
+    Permite al usuario configurar su turno preferido y dias libres
+    antes de rankear las combinaciones de horario.
+    Los cambios se persisten en data/preferencias.json
+    """
+
+    NOMBRES_TURNO = {
+        "manana":     "Mañana  (07:00 – 13:00)",
+        "tarde":      "Tarde   (13:00 – 19:00)",
+        "noche":      "Noche   (19:00 – 22:00)",
+        "cualquiera": "Sin preferencia",
+    }
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C_DARK)
+        self.pack(fill="both", expand=True)
+        self.app = app
+        self.prefs = cargar_preferencias()
+        self._vars_dias = {}
+        self._var_turno = tk.StringVar(value=self.prefs.get("turno", "cualquiera"))
+        self._construir()
+
+    def _construir(self):
+        # ── Header
+        hdr = tk.Frame(self, bg=C_DARK, pady=16)
+        hdr.pack(fill="x", padx=32)
+        tk.Label(hdr, text="Preferencias de Horario",
+                 font=("Segoe UI Black", 22, "bold"),
+                 bg=C_DARK, fg=C_WHITE).pack(side="left")
+
+        # ── Descripción
+        desc = tk.Frame(self, bg=C_GRAY, padx=20, pady=12)
+        desc.pack(fill="x", padx=32, pady=(0, 20))
+        tk.Label(desc,
+                 text=("Configura tus preferencias para que el sistema priorice "
+                       "los horarios que mejor se adapten a tu rutina.\n"
+                       "Estas preferencias afectan el puntaje al rankear combinaciones."),
+                 font=("Segoe UI", 10), bg=C_GRAY, fg=C_LIGHT,
+                 wraplength=680, justify="left").pack(anchor="w")
+
+        # ── Contenido en dos columnas
+        body = tk.Frame(self, bg=C_DARK)
+        body.pack(fill="both", expand=True, padx=32)
+
+        self._seccion_turno(body)
+        self._seccion_dias_libres(body)
+
+        # ── Botón guardar
+        btn_frame = tk.Frame(self, bg=C_DARK)
+        btn_frame.pack(fill="x", padx=32, pady=20)
+        BotonUTP(btn_frame, "💾  Guardar preferencias", self._guardar,
+                 ancho=220, alto=44, bg=C_DARK).pack(side="left")
+        BotonUTP(btn_frame, "↺  Restablecer", self._restablecer,
+                 ancho=160, alto=44, color=C_GRAY2, bg=C_DARK).pack(side="left", padx=12)
+
+        # ── Panel de resumen actual
+        self._panel_resumen(self)
+
+    def _seccion_turno(self, parent):
+        card = tk.Frame(parent, bg=C_GRAY, padx=20, pady=16)
+        card.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        tk.Label(card, text="⏰  Turno preferido",
+                 font=("Segoe UI", 12, "bold"),
+                 bg=C_GRAY, fg=C_WHITE).pack(anchor="w", pady=(0, 8))
+        tk.Label(card,
+                 text="El rankeador dará más puntos a combinaciones\ndonde la mayoría de clases caigan en este turno.",
+                 font=("Segoe UI", 9), bg=C_GRAY, fg=C_TEXT_MUT,
+                 justify="left").pack(anchor="w", pady=(0, 12))
+
+        for key, label in self.NOMBRES_TURNO.items():
+            color_rb = C_RED if self._var_turno.get() == key else C_GRAY2
+            rb = tk.Radiobutton(
+                card, text=label,
+                variable=self._var_turno, value=key,
+                font=("Segoe UI", 10),
+                bg=C_GRAY, fg=C_WHITE,
+                selectcolor=C_RED,
+                activebackground=C_GRAY,
+                activeforeground=C_WHITE,
+                relief="flat", padx=8, pady=6,
+                cursor="hand2"
+            )
+            rb.pack(anchor="w", pady=2)
+
+    def _seccion_dias_libres(self, parent):
+        card = tk.Frame(parent, bg=C_GRAY, padx=20, pady=16)
+        card.pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+        tk.Label(card, text="📅  Días libres deseados",
+                 font=("Segoe UI", 12, "bold"),
+                 bg=C_GRAY, fg=C_WHITE).pack(anchor="w", pady=(0, 8))
+        tk.Label(card,
+                 text="Marca los días que prefieres no tener clases.\nEl sistema penalizará combinaciones que los ocupen.",
+                 font=("Segoe UI", 9), bg=C_GRAY, fg=C_TEXT_MUT,
+                 justify="left").pack(anchor="w", pady=(0, 12))
+
+        dias_guardados = self.prefs.get("dias_libres", [])
+        for dia in DIAS_SEMANA:
+            var = tk.BooleanVar(value=(dia in dias_guardados))
+            self._vars_dias[dia] = var
+            cb = tk.Checkbutton(
+                card, text=dia,
+                variable=var,
+                font=("Segoe UI", 10),
+                bg=C_GRAY, fg=C_WHITE,
+                selectcolor=C_RED,
+                activebackground=C_GRAY,
+                activeforeground=C_WHITE,
+                relief="flat", padx=8, pady=4,
+                cursor="hand2"
+            )
+            cb.pack(anchor="w", pady=1)
+
+    def _panel_resumen(self, parent):
+        frame = tk.Frame(parent, bg=C_GRAY2, padx=20, pady=10)
+        frame.pack(fill="x", padx=32, pady=(0, 16))
+        turno_txt = self.NOMBRES_TURNO.get(
+            self.prefs.get("turno", "cualquiera"), "Sin preferencia")
+        dias_txt = ", ".join(self.prefs.get("dias_libres", [])) or "Ninguno"
+        tk.Label(frame,
+                 text=f"Configuración actual  →  Turno: {turno_txt}    Días libres: {dias_txt}",
+                 font=("Segoe UI", 9), bg=C_GRAY2, fg=C_TEXT_MUT).pack(anchor="w")
+
+    def _guardar(self):
+        turno = self._var_turno.get()
+        dias_libres = [d for d, v in self._vars_dias.items() if v.get()]
+
+        # Validar: no pueden ser libres TODOS los días
+        if len(dias_libres) >= len(DIAS_SEMANA):
+            messagebox.showwarning("Selección inválida",
+                                   "No puedes marcar todos los días como libres.")
+            return
+
+        self.prefs["turno"]      = turno
+        self.prefs["dias_libres"] = dias_libres
+        guardar_preferencias(self.prefs)
+
+        turno_txt  = self.NOMBRES_TURNO.get(turno, turno)
+        dias_texto = ", ".join(dias_libres) if dias_libres else "Ninguno"
+        messagebox.showinfo("Guardado",
+                            f"✅ Preferencias guardadas.\n\n"
+                            f"Turno: {turno_txt}\n"
+                            f"Días libres: {dias_texto}\n\n"
+                            f"El rankeador usará estas preferencias la próxima vez.")
+
+    def _restablecer(self):
+        if messagebox.askyesno("Restablecer", "¿Restablecer preferencias por defecto?"):
+            self._var_turno.set("cualquiera")
+            for var in self._vars_dias.values():
+                var.set(False)
+            self.prefs["turno"]       = "cualquiera"
+            self.prefs["dias_libres"] = []
+            guardar_preferencias(self.prefs)
+            messagebox.showinfo("Restablecido", "Preferencias restablecidas.")
+
+class PantallaTabla(tk.Frame):
+    """Grilla semanal con franjas de 30 min, colores por curso y exportacion .txt"""
+
+    COLORES_CURSO = [
+        "#C0392B", "#1565C0", "#2E7D32", "#6A1B9A",
+        "#E65100", "#00838F", "#AD1457", "#558B2F",
+    ]
+    FRANJA_MIN  = 30
+    HORA_INICIO = 7
+    HORA_FIN    = 22
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C_DARK)
+        self.pack(fill="both", expand=True)
+        self.app = app
+        self._color_curso = {}
+        self._asignar_colores()
+        self._construir()
+
+    def _asignar_colores(self):
+        for i, curso in enumerate(self.app.cursos):
+            nombre = curso["nombre"]
+            if nombre not in self._color_curso:
+                self._color_curso[nombre] = self.COLORES_CURSO[i % len(self.COLORES_CURSO)]
+
+    def _construir(self):
+        hdr = tk.Frame(self, bg=C_DARK, pady=16)
+        hdr.pack(fill="x", padx=32)
+        tk.Label(hdr, text="Tabla Semanal de Horarios",
+                 font=("Segoe UI Black", 22, "bold"),
+                 bg=C_DARK, fg=C_WHITE).pack(side="left")
+        BotonUTP(hdr, "Exportar .txt", self._exportar_txt,
+                 ancho=150, alto=36, bg=C_DARK).pack(side="right")
+
+        self._construir_leyenda()
+
+        if not self.app.cursos:
+            tk.Label(self,
+                     text="No hay cursos registrados.\nVe a Mis Cursos para agregar.",
+                     font=("Segoe UI", 11), bg=C_DARK, fg=C_TEXT_MUT,
+                     justify="center").pack(expand=True)
+            return
+
+        wrap = tk.Frame(self, bg=C_DARK)
+        wrap.pack(fill="both", expand=True, padx=32, pady=(0, 16))
+
+        self._canvas = tk.Canvas(wrap, bg=C_DARK, highlightthickness=0)
+        hsb = ttk.Scrollbar(wrap, orient="horizontal", command=self._canvas.xview)
+        vsb = ttk.Scrollbar(wrap, orient="vertical",   command=self._canvas.yview)
+        self._inner = tk.Frame(self._canvas, bg=C_DARK)
+
+        self._canvas.configure(xscrollcommand=hsb.set, yscrollcommand=vsb.set)
+        hsb.pack(side="bottom", fill="x")
+        vsb.pack(side="right",  fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
+        self._inner.bind("<Configure>",
+            lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self._canvas.bind_all("<MouseWheel>",
+            lambda e: self._canvas.yview_scroll(-1*(e.delta//120), "units"))
+
+        self._construir_grilla()
+
+    def _construir_leyenda(self):
+        if not self.app.cursos:
+            return
+        ley = tk.Frame(self, bg=C_GRAY, padx=16, pady=10)
+        ley.pack(fill="x", padx=32, pady=(0, 8))
+        tk.Label(ley, text="Cursos:", font=("Segoe UI", 9, "bold"),
+                 bg=C_GRAY, fg=C_TEXT_MUT).pack(side="left", padx=(0, 12))
+        for curso in self.app.cursos:
+            nombre = curso["nombre"]
+            color  = self._color_curso.get(nombre, C_RED)
+            chip   = tk.Frame(ley, bg=color, padx=8, pady=3)
+            chip.pack(side="left", padx=4)
+            tk.Label(chip, text=nombre[:22], font=("Segoe UI", 8, "bold"),
+                     bg=color, fg=C_WHITE).pack()
+
+    def _get_dias_y_mapa(self):
+        dias_con_clases = set()
+        mapa = {}
+        for curso in self.app.cursos:
+            for sec in curso.get("secciones", []):
+                for blq in sec.get("bloques", []):
+                    dia = blq["dia"]
+                    dias_con_clases.add(dia)
+                    ini_m = hora_a_min(blq["inicio"])
+                    fin_m = hora_a_min(blq["fin"])
+                    f = (ini_m // self.FRANJA_MIN) * self.FRANJA_MIN
+                    while f < fin_m:
+                        key = (dia, f)
+                        mapa.setdefault(key, []).append({
+                            "curso":   curso["nombre"],
+                            "seccion": sec["codigo"],
+                            "docente": sec["docente"],
+                            "inicio":  blq["inicio"],
+                            "fin":     blq["fin"],
+                            "color":   self._color_curso.get(curso["nombre"], C_RED),
+                        })
+                        f += self.FRANJA_MIN
+        dias = [d for d in DIAS if d in dias_con_clases] or DIAS[:5]
+        return dias, mapa
+
+    def _construir_grilla(self):
+        inner = self._inner
+        dias, mapa = self._get_dias_y_mapa()
+
+        # Cabecera
+        tk.Label(inner, text="Hora", font=("Segoe UI", 8, "bold"),
+                 bg=C_GRAY2, fg=C_TEXT_MUT,
+                 width=7, height=2, anchor="center").grid(
+                     row=0, column=0, padx=1, pady=1, sticky="nsew")
+
+        for col, dia in enumerate(dias):
+            tk.Label(inner, text=dia, font=("Segoe UI", 9, "bold"),
+                     bg=C_RED, fg=C_WHITE,
+                     width=20, height=2, anchor="center").grid(
+                         row=0, column=col+1, padx=1, pady=1, sticky="nsew")
+
+        # Franjas
+        m = self.HORA_INICIO * 60
+        row = 1
+        while m < self.HORA_FIN * 60:
+            hh, mm = m // 60, m % 60
+            bg_row = C_GRAY if (row % 2 == 0) else C_GRAY2
+
+            tk.Label(inner, text=f"{hh:02d}:{mm:02d}", font=("Segoe UI", 7),
+                     bg=bg_row, fg=C_TEXT_MUT,
+                     width=7, height=1, anchor="center").grid(
+                         row=row, column=0, padx=1, pady=0, sticky="nsew")
+
+            for col, dia in enumerate(dias):
+                key = (dia, m)
+                if key in mapa:
+                    items = mapa[key]
+                    if len(items) > 1:
+                        bg_cell, fg_cell = C_WARNING, C_BLACK
+                        texto = "CONFLICTO"
+                    else:
+                        bg_cell = items[0]["color"]
+                        fg_cell = C_WHITE
+                        ini_m_clase = hora_a_min(items[0]["inicio"])
+                        if m == (ini_m_clase // self.FRANJA_MIN) * self.FRANJA_MIN:
+                            texto = items[0]["curso"][:18]
+                        else:
+                            texto = ""
+
+                    lbl = tk.Label(inner, text=texto,
+                                   font=("Segoe UI", 7, "bold"),
+                                   bg=bg_cell, fg=fg_cell,
+                                   width=20, height=1, anchor="w", padx=4)
+                    lbl.grid(row=row, column=col+1, padx=1, pady=0, sticky="nsew")
+
+                    tip = (f"{mapa[key][0]['curso']}\n"
+                           f"Sec.{mapa[key][0]['seccion']} - {mapa[key][0]['docente']}\n"
+                           f"{mapa[key][0]['inicio']} - {mapa[key][0]['fin']}")
+                    self._bind_tooltip(lbl, tip)
+                else:
+                    tk.Label(inner, text="", bg=bg_row, width=20, height=1).grid(
+                        row=row, column=col+1, padx=1, pady=0, sticky="nsew")
+
+            m += self.FRANJA_MIN
+            row += 1
+
+    def _bind_tooltip(self, widget, texto):
+        tip = None
+
+        def mostrar(e):
+            nonlocal tip
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{e.x_root+12}+{e.y_root+8}")
+            tk.Label(tip, text=texto, font=("Segoe UI", 8),
+                     bg="#FFFFCC", fg=C_BLACK, relief="solid", bd=1,
+                     padx=6, pady=4, justify="left").pack()
+
+        def ocultar(e):
+            nonlocal tip
+            if tip:
+                tip.destroy()
+                tip = None
+
+        widget.bind("<Enter>", mostrar)
+        widget.bind("<Leave>", ocultar)
+
+    def _exportar_txt(self):
+        if not self.app.cursos:
+            messagebox.showinfo("Sin datos", "No hay cursos para exportar.")
+            return
+
+        dias, _ = self._get_dias_y_mapa()
+        mapa_txt = {}
+        for curso in self.app.cursos:
+            for sec in curso.get("secciones", []):
+                for blq in sec.get("bloques", []):
+                    dia = blq["dia"]
+                    ini_m = hora_a_min(blq["inicio"])
+                    fin_m = hora_a_min(blq["fin"])
+                    f = (ini_m // self.FRANJA_MIN) * self.FRANJA_MIN
+                    while f < fin_m:
+                        key = (dia, f)
+                        mapa_txt.setdefault(key, []).append(
+                            f"{curso['nombre']}[{sec['codigo']}]")
+                        f += self.FRANJA_MIN
+
+        COL = 22
+        lineas = [
+            "UNIHORARIO - Tabla Semanal de Horarios",
+            "=" * (8 + (COL + 1) * len(dias)),
+            f"{'Hora':<7}" + "".join(f"|{d:^{COL}}" for d in dias),
+        ]
+        lineas.append("-" * len(lineas[-1]))
+
+        m = self.HORA_INICIO * 60
+        while m < self.HORA_FIN * 60:
+            hh, mm = m // 60, m % 60
+            fila = f"{hh:02d}:{mm:02d} "
+            for dia in dias:
+                items = mapa_txt.get((dia, m), [])
+                if items:
+                    cont = "CONFLICTO" if len(items) > 1 else items[0][:COL-2]
+                else:
+                    cont = ""
+                fila += f"|{cont:<{COL}}"
+            lineas.append(fila)
+            m += self.FRANJA_MIN
+
+        lineas += ["-" * len(lineas[2]), "", "Generado por UniHorario - UTP"]
+
+        import tkinter.filedialog as fd
+        ruta = fd.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Texto", "*.txt"), ("Todos", "*.*")],
+            initialfile="horario_semanal.txt",
+            title="Guardar tabla como..."
+        )
+        if ruta:
+            with open(ruta, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lineas))
+            messagebox.showinfo("Exportado", f"Tabla guardada en:\n{ruta}")
 
 # ─────────────────────────────────────────────
 #  ESTILOS TTK

@@ -1,0 +1,23 @@
+[
+  {
+    "nombre": "curso1",
+    "secciones": [
+      {
+        "codigo": "123",
+        "docente": "profesor 1",
+        "bloques": [
+          {
+            "dia": "Lunes",
+            "inicio": "07:00",
+            "fin": "09:00"
+          },
+          {
+            "dia": "Lunes",
+            "inicio": "08:00",
+            "fin": "09:00"
+          }
+        ]
+      }
+    ]
+  }
+]
