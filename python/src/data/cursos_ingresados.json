@@ -1,0 +1,39 @@
+[
+  {
+    "nombre": "a",
+    "secciones": [
+      {
+        "codigo": "a",
+        "docente": "a",
+        "bloques": [
+          {
+            "dia": "Lunes",
+            "inicio": "07:00",
+            "fin": "09:00"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "nombre": "hkjhkj",
+    "secciones": [
+      {
+        "codigo": "6446",
+        "docente": "hjg",
+        "bloques": [
+          {
+            "dia": "Lunes",
+            "inicio": "07:00",
+            "fin": "09:00"
+          },
+          {
+            "dia": "Lunes",
+            "inicio": "07:00",
+            "fin": "09:00"
+          }
+        ]
+      }
+    ]
+  }
+]
