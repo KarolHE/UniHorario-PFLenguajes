@@ -135,7 +135,9 @@ def rankear(combinaciones: List[List[Dict]], top: int = 5) -> List[Dict]:
         })
 
     # Ordenar de mayor a menor puntaje
-    resultados.sort(key=lambda x: x["puntaje"], reverse=True)
+    resultados.sort(
+        key=lambda x: x["puntaje"], 
+        reverse=True)
 
     # Reasignar posiciones tras el ordenamiento
     for i, r in enumerate(resultados):
