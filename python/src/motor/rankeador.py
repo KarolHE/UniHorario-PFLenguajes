@@ -37,6 +37,21 @@ TURNOS = {
 
 DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
 
+ALIAS_DIAS = {
+    "lunes": DIAS_SEMANA[0],
+    "martes": DIAS_SEMANA[1],
+    "miercoles": DIAS_SEMANA[2],
+    "miércoles": DIAS_SEMANA[2],
+    "miã©rcoles": DIAS_SEMANA[2],
+    "mi�rcoles": DIAS_SEMANA[2],
+    "jueves": DIAS_SEMANA[3],
+    "viernes": DIAS_SEMANA[4],
+    "sabado": DIAS_SEMANA[5],
+    "sábado": DIAS_SEMANA[5],
+    "sã¡bado": DIAS_SEMANA[5],
+    "s�bado": DIAS_SEMANA[5],
+}
+
 
 def hora_a_min(h: str) -> int:
     """Convierte '8:30' a 510 minutos."""
@@ -45,6 +60,27 @@ def hora_a_min(h: str) -> int:
         return int(partes[0]) * 60 + int(partes[1])
     except Exception:
         return 0
+
+
+def normalizar_dia(dia: str) -> str:
+    clave = str(dia).strip().lower()
+    return ALIAS_DIAS.get(clave, dia)
+
+
+def normalizar_preferencias(prefs: Dict) -> Dict:
+    turno = prefs.get("turno", "cualquiera")
+    if turno not in TURNOS:
+        turno = "cualquiera"
+
+    dias = []
+    for dia in prefs.get("dias_libres", []):
+        dia_norm = normalizar_dia(dia)
+        if dia_norm in DIAS_SEMANA and dia_norm not in dias:
+            dias.append(dia_norm)
+
+    prefs["turno"] = turno
+    prefs["dias_libres"] = dias
+    return prefs
 
 
 # ─────────────────────────────────────────────
@@ -62,14 +98,15 @@ def cargar_preferencias() -> Dict:
             prefs.update(guardadas)
             prefs["pesos"] = dict(PREFERENCIAS_DEFAULT["pesos"])
             prefs["pesos"].update(guardadas.get("pesos", {}))
-            return prefs
+            return normalizar_preferencias(prefs)
         except Exception:
             pass
-    return dict(PREFERENCIAS_DEFAULT)
+    return normalizar_preferencias(dict(PREFERENCIAS_DEFAULT))
 
 
 def guardar_preferencias(prefs: Dict) -> None:
     """Persiste las preferencias en disco."""
+    prefs = normalizar_preferencias(prefs)
     os.makedirs(os.path.dirname(PREFS_FILE), exist_ok=True)
     with open(PREFS_FILE, "w", encoding="utf-8") as f:
         json.dump(prefs, f, ensure_ascii=False, indent=2)
@@ -82,6 +119,8 @@ def aplicar_pesos_segun_preferencias(prefs: Dict) -> Dict:
     Si eligió días libres → activa peso dias_libres.
     """
     pesos = dict(prefs.get("pesos", PREFERENCIAS_DEFAULT["pesos"]))
+    pesos["turno_preferido"] = 0.0
+    pesos["dias_libres"] = 0.0
 
     if prefs.get("turno", "cualquiera") != "cualquiera":
         pesos["turno_preferido"] = 2.0   # criterio importante
@@ -222,6 +261,27 @@ def puntaje_dias_libres(combinacion: List[Dict], dias_libres: List[str]) -> floa
     return puntaje
 
 
+def cumple_restricciones_preferencias(combinacion: List[Dict], prefs: Dict) -> bool:
+    """Valida restricciones duras de turno y dias libres configuradas."""
+    turno = prefs.get("turno", "cualquiera")
+    dias_libres = set(prefs.get("dias_libres", []))
+    rango_turno = TURNOS.get(turno)
+
+    for sec in combinacion:
+        for blq in sec.get("bloques", []):
+            if blq.get("dia") in dias_libres:
+                return False
+
+            if rango_turno is not None:
+                ini_m = hora_a_min(blq.get("inicio", "00:00"))
+                fin_m = hora_a_min(blq.get("fin", "00:00"))
+                turno_ini, turno_fin = rango_turno
+                if ini_m < turno_ini or fin_m > turno_fin:
+                    return False
+
+    return True
+
+
 # ─────────────────────────────────────────────
 #  PUNTAJE TOTAL con preferencias
 # ─────────────────────────────────────────────
@@ -262,12 +322,17 @@ def rankear(combinaciones: List[List[Dict]],
 
     if prefs is None:
         prefs = cargar_preferencias()
+    else:
+        prefs = normalizar_preferencias(prefs)
 
     turno       = prefs.get("turno", "cualquiera")
     dias_libres = prefs.get("dias_libres", [])
 
     resultados = []
     for i, combo in enumerate(combinaciones):
+        if not cumple_restricciones_preferencias(combo, prefs):
+            continue
+
         score = puntaje_total(combo, prefs)
         dias = sorted(set(
             blq["dia"]
@@ -303,8 +368,13 @@ def rankear(combinaciones: List[List[Dict]],
     os.makedirs(RESULTADOS_DIR, exist_ok=True)
     if top_resultados:
         ruta = os.path.join(RESULTADOS_DIR, "mejor_horario.json")
+        mejor_para_guardar = dict(top_resultados[0])
+        mejor_para_guardar["secciones"] = [
+            {k: v for k, v in sec.items() if not k.startswith("_")}
+            for sec in mejor_para_guardar.get("secciones", [])
+        ]
         with open(ruta, "w", encoding="utf-8") as f:
-            json.dump(top_resultados[0], f, ensure_ascii=False, indent=2)
+            json.dump(mejor_para_guardar, f, ensure_ascii=False, indent=2)
 
     return top_resultados
 

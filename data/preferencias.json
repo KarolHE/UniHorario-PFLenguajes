@@ -1,0 +1,18 @@
+{
+  "turno": "manana",
+  "dias_libres": [
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Viernes",
+    "Sábado"
+  ],
+  "pesos": {
+    "dias_concentrados": 1.5,
+    "menos_huecos": 1.2,
+    "horario_comodo": 0.8,
+    "carga_equilibrada": 1.0,
+    "turno_preferido": 0.0,
+    "dias_libres": 0.0
+  }
+}
