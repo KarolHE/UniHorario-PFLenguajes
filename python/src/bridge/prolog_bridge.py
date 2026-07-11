@@ -128,14 +128,6 @@ def cargar_combinaciones_guardadas() -> list:
         except Exception:
             pass
     return []
-
-
-# ============================================================
-#  VALIDACIÓN MANUAL  (Mejora 4 — Avance 2)
-#  El estudiante elige una sección por curso desde la UI y
-#  Prolog responde si la combinación tiene conflictos.
-# ============================================================
-
 def validar_seleccion_manual(codigos_secciones: list, timeout: int = 15) -> dict:
     """
     Recibe una lista de códigos de sección (strings), por ejemplo:
