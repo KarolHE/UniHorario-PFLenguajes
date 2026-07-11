@@ -2,17 +2,25 @@ import sys, os as _os
 _motor = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "motor"))
 if _motor not in sys.path:
     sys.path.insert(0, _motor)
-from rankeador import (cargar_preferencias, guardar_preferencias,
+_bridge = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "bridge"))
+if _bridge not in sys.path:
+    sys.path.insert(0, _bridge)
+from rankeador import (cargar_preferencias, guardar_preferencias, rankear,
+                       cumple_restricciones_preferencias,
                        DIAS_SEMANA, TURNOS)
 _bridge = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "bridge"))
 if _bridge not in sys.path:
     sys.path.insert(0, _bridge)
 from prolog_bridge import validar_seleccion_manual
+from exportador_html import generar_html
+from prolog_bridge import validar_seleccion_manual
+from scala_bridge import exportar_a_prolog
 import tkinter as tk
 from tkinter import ttk, messagebox, font
 import json
 import os
 from datetime import datetime
+from itertools import product
 import random
 
 # ─────────────────────────────────────────────
@@ -110,6 +118,40 @@ def validar_seleccion_python(elegidos):
     if not conflictos_texto:
         return {"ok": True, "valida": True, "conflictos": []}
     return {"ok": True, "valida": False, "conflictos": conflictos_texto}
+def generar_combinaciones_validas_locales(cursos):
+    opciones_por_curso = []
+    for curso in cursos:
+        secciones = curso.get("secciones", [])
+        if not secciones:
+            return []
+        opciones_por_curso.append([(curso["nombre"], sec) for sec in secciones])
+
+    combinaciones = []
+    for seleccion in product(*opciones_por_curso):
+        combo = []
+        bloques_previos = []
+        valida = True
+
+        for nombre_curso, sec in seleccion:
+            sec_rank = {k: v for k, v in sec.items()}
+            sec_rank["bloques"] = [dict(b) for b in sec.get("bloques", [])]
+            sec_rank["_curso_nombre"] = nombre_curso
+
+            for bloque in sec_rank["bloques"]:
+                if any(bloques_chocan(bloque, previo) for previo in bloques_previos):
+                    valida = False
+                    break
+                bloques_previos.append(bloque)
+
+            if not valida:
+                break
+            combo.append(sec_rank)
+
+        if valida:
+            combinaciones.append(combo)
+
+    return combinaciones
+
 
 # ─────────────────────────────────────────────
 #  WIDGET BASE  — botón estilizado
@@ -214,6 +256,7 @@ class UniHorarioApp(tk.Tk):
             ("📅  Ver Horario",    "horario"),
             ("📊  Tabla Semanal",  "tabla"),
             ("⚙️  Preferencias",   "preferencias"),
+            ("🛠️  Armar Manual",   "manual"),
             ("🕐  Historial",      "historial"),
             ("🧩  Armar Manual",   "manual"),
         ]
@@ -263,7 +306,6 @@ class UniHorarioApp(tk.Tk):
             PantallaPreferencias(self.contenedor, self)
         elif pantalla == "manual":
              PantallaArmarManual(self.contenedor, self)
-
     def guardar_cursos(self):
         guardar_json(DATA_FILE, self.cursos)
 
@@ -582,6 +624,24 @@ class PantallaCursos(tk.Frame):
                                            parent=ventana)
                     return
                 blqs.append({"dia": dia_v.get(), "inicio": ini, "fin": fin})
+
+            prefs = cargar_preferencias()
+            if not cumple_restricciones_preferencias([{"bloques": blqs}], prefs):
+                turno = prefs.get("turno", "cualquiera")
+                dias_libres = prefs.get("dias_libres", [])
+                restricciones = []
+                if turno != "cualquiera":
+                    restricciones.append(f"turno {turno}")
+                if dias_libres:
+                    restricciones.append("dias libres: " + ", ".join(dias_libres))
+                detalle = "; ".join(restricciones) or "las preferencias actuales"
+                messagebox.showwarning(
+                    "No permitido por preferencias",
+                    f"Esta sección no respeta {detalle}.",
+                    parent=ventana
+                )
+                return
+
             self.app.cursos[curso_idx]["secciones"].append({
                 "codigo": cod, "docente": doc, "bloques": blqs
             })
@@ -764,6 +824,10 @@ class PantallaHorario(tk.Frame):
                  bg=C_DARK, fg=C_WHITE).pack(side="left")
         BotonUTP(hdr, "💾 Guardar en historial", self._guardar_historial,
                  ancho=200, alto=36, bg=C_DARK).pack(side="right")
+        BotonUTP(hdr, "🌐 Exportar HTML", self._exportar_html,
+                 ancho=170, alto=36, color=C_GRAY2, bg=C_DARK).pack(side="right", padx=8)
+        BotonUTP(hdr, "⭐ Rankear mejor", self._rankear_mejor_horario,
+                 ancho=160, alto=36, color=C_GRAY2, bg=C_DARK).pack(side="right", padx=8)
 
         conflictos = detectar_conflictos(self.app.cursos)
         if conflictos:
@@ -860,6 +924,89 @@ class PantallaHorario(tk.Frame):
                     tk.Label(inner, text="", bg=bg, width=18, height=2).grid(
                         row=row+1, column=col+1, padx=1, pady=1)
 
+    def _rankear_mejor_horario(self):
+        if not self.app.cursos:
+            messagebox.showinfo("Sin datos", "No hay cursos para rankear.")
+            return
+
+        combinaciones = generar_combinaciones_validas_locales(self.app.cursos)
+        if not combinaciones:
+            messagebox.showwarning(
+                "Sin combinaciones",
+                "No se encontraron combinaciones validas sin cruces de horario."
+            )
+            return
+
+        prefs = cargar_preferencias()
+        resultados = rankear(combinaciones, top=1, prefs=prefs)
+        if not resultados:
+            messagebox.showwarning(
+                "Sin resultados",
+                "No hay combinaciones que respeten las preferencias configuradas."
+            )
+            return
+
+        mejor = resultados[0]
+        cursos_filtrados = []
+        for sec in mejor.get("secciones", []):
+            nombre_curso = sec.get("_curso_nombre")
+            if not nombre_curso:
+                continue
+            sec_limpia = {k: v for k, v in sec.items() if not k.startswith("_")}
+            sec_limpia["bloques"] = [dict(b) for b in sec.get("bloques", [])]
+            cursos_filtrados.append({
+                "nombre": nombre_curso,
+                "secciones": [sec_limpia]
+            })
+
+        if not cursos_filtrados:
+            messagebox.showwarning("Sin resultados", "No se pudo aplicar el horario rankeado.")
+            return
+
+        self.app.cursos = cursos_filtrados
+        self.app.guardar_cursos()
+
+        aplicadas = mejor.get("preferencias_aplicadas", {})
+        turno = aplicadas.get("turno", "cualquiera")
+        dias_libres = aplicadas.get("dias_libres", [])
+        criterios = []
+        if turno != "cualquiera":
+            criterios.append(f"turno: {turno}")
+        if dias_libres:
+            criterios.append("dias libres: " + ", ".join(dias_libres))
+        detalle = "\nCriterios aplicados: " + "; ".join(criterios) if criterios else "\nSin preferencias configuradas."
+
+        messagebox.showinfo(
+            "Horario rankeado",
+            f"Se aplico la mejor combinacion encontrada.\n"
+            f"Puntaje: {mejor.get('puntaje', 0)}"
+            f"{detalle}"
+        )
+        self.app.ir_a("horario")
+
+    def _exportar_html(self):
+        if not self.app.cursos:
+            messagebox.showinfo("Sin datos", "No hay cursos para exportar.")
+            return
+        import tkinter.filedialog as fd
+        ruta = fd.asksaveasfilename(
+            defaultextension=".html",
+            filetypes=[("HTML", "*.html"), ("Todos", "*.*")],
+            initialfile="horario_unihorario.html",
+            title="Guardar HTML como..."
+        )
+        if not ruta:
+            return
+        ok = generar_html(self.app.cursos, ruta)
+        if ok:
+            import webbrowser
+            if messagebox.askyesno("Exportado",
+                                   f"✅ HTML guardado en:\n{ruta}\n\n"
+                                   "¿Deseas abrirlo en el navegador ahora?"):
+                webbrowser.open(f"file:///{ruta.replace(chr(92), '/')}")
+        else:
+            messagebox.showerror("Error", "No se pudo generar el archivo HTML.")
+
     def _guardar_historial(self):
         if not self.app.cursos:
             messagebox.showinfo("Sin datos", "No hay cursos para guardar.")
@@ -951,6 +1098,235 @@ class PantallaHistorial(tk.Frame):
 # ─────────────────────────────────────────────
 #  PANTALLA: PREFERENCIAS DE RANKEADOR  (Mejora 2 - Avance 2)
 # ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+#  PANTALLA: ARMAR HORARIO MANUAL  (Mejora 4 - Avance 2)
+#  El usuario elige una seccion por curso y Prolog valida
+#  si la combinacion tiene conflictos, usando consultas.pl
+# ─────────────────────────────────────────────
+class PantallaArmarManual(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C_DARK)
+        self.pack(fill="both", expand=True)
+        self.app = app
+        self._seleccion = {}      # nombre_curso -> StringVar(codigo_seccion)
+        self._resultado_frame = None
+        self._construir()
+
+    def _construir(self):
+        hdr = tk.Frame(self, bg=C_DARK, pady=18)
+        hdr.pack(fill="x", padx=32)
+        tk.Label(hdr, text="Armar Horario Manualmente",
+                 font=("Segoe UI Black", 22, "bold"),
+                 bg=C_DARK, fg=C_WHITE).pack(side="left")
+
+        desc = tk.Frame(self, bg=C_GRAY, padx=20, pady=12)
+        desc.pack(fill="x", padx=32, pady=(0, 16))
+        tk.Label(desc,
+                 text=("Elige una sección por curso y presiona \"Validar con Prolog\" "
+                       "para verificar si tu selección tiene cruces de horario.\n"
+                       "El motor lógico de Prolog (consultas.pl) hace la verificación en tiempo real."),
+                 font=("Segoe UI", 10), bg=C_GRAY, fg=C_LIGHT,
+                 wraplength=700, justify="left").pack(anchor="w")
+
+        if not self.app.cursos:
+            tk.Label(self, text="No hay cursos registrados.\nVe a 'Mis Cursos' para agregar.",
+                     font=("Segoe UI", 11), bg=C_DARK, fg=C_TEXT_MUT,
+                     justify="center").pack(expand=True)
+            return
+
+        # ── Scroll area para selección de cursos
+        wrap = tk.Frame(self, bg=C_DARK)
+        wrap.pack(fill="both", expand=True, padx=32)
+
+        canvas = tk.Canvas(wrap, bg=C_DARK, highlightthickness=0)
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=C_DARK)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.create_window((0, 0), window=inner, anchor="nw", width=720)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
+
+        for curso in self.app.cursos:
+            self._fila_curso(inner, curso)
+
+        # ── Botón validar
+        btn_frame = tk.Frame(self, bg=C_DARK, pady=16)
+        btn_frame.pack(fill="x", padx=32)
+        BotonUTP(btn_frame, "🔎  Validar con Prolog", self._validar,
+                 ancho=220, alto=44, bg=C_DARK).pack(side="left")
+
+        # ── Contenedor de resultados (se llena tras validar)
+        self._resultado_frame = tk.Frame(self, bg=C_DARK)
+        self._resultado_frame.pack(fill="both", expand=True, padx=32, pady=(0, 20))
+
+    def _fila_curso(self, parent, curso):
+        nombre = curso["nombre"]
+        secciones = curso.get("secciones", [])
+
+        card = tk.Frame(parent, bg=C_GRAY, padx=16, pady=12)
+        card.pack(fill="x", pady=6)
+
+        tk.Label(card, text=nombre, font=("Segoe UI", 11, "bold"),
+                 bg=C_GRAY, fg=C_WHITE).pack(anchor="w")
+
+        if not secciones:
+            tk.Label(card, text="(sin secciones registradas)",
+                     font=("Segoe UI", 9), bg=C_GRAY, fg=C_TEXT_MUT).pack(anchor="w")
+            return
+
+        var = tk.StringVar()
+        opciones = []
+        for sec in secciones:
+            horarios_txt = ", ".join(
+                f'{b["dia"][:3]} {b["inicio"]}-{b["fin"]}' for b in sec.get("bloques", [])
+            )
+            label = f'Sec. {sec["codigo"]} · {sec["docente"]}  ({horarios_txt})'
+            opciones.append(label)
+
+        var.set(opciones[0])
+        self._seleccion[nombre] = {
+            "var": var,
+            "secciones": secciones,
+            "opciones": opciones,
+        }
+
+        combo = ttk.Combobox(card, textvariable=var, values=opciones,
+                             state="readonly", font=("Segoe UI", 9), width=70)
+        combo.pack(anchor="w", pady=(6, 0))
+
+    def _validar(self):
+        if not self._seleccion:
+            return
+
+        codigos = []
+        detalle_seleccion = []
+        for nombre_curso, info in self._seleccion.items():
+            idx_elegido = info["opciones"].index(info["var"].get())
+            sec_elegida = info["secciones"][idx_elegido]
+            codigos.append(sec_elegida["codigo"])
+            detalle_seleccion.append({
+                "curso": nombre_curso,
+                "seccion": sec_elegida["codigo"],
+                "docente": sec_elegida["docente"],
+            })
+
+        # Limpiar resultado anterior
+        for w in self._resultado_frame.winfo_children():
+            w.destroy()
+
+        tk.Label(self._resultado_frame, text="Sincronizando datos con Scala...",
+                 font=("Segoe UI", 10, "italic"),
+                 bg=C_DARK, fg=C_TEXT_MUT).pack(anchor="w", pady=6)
+        self.update_idletasks()
+
+        # ── Mejora 4 (auto-sync): regenera hechos.pl desde Scala
+        #    para que Prolog siempre valide contra los datos actuales.
+        sync = exportar_a_prolog()
+        if not sync.get("ok"):
+            for w in self._resultado_frame.winfo_children():
+                w.destroy()
+            err = tk.Frame(self._resultado_frame, bg="#3D1A00", padx=16, pady=12)
+            err.pack(fill="x", pady=6)
+            tk.Label(err, text="⚠️  No se pudo sincronizar con Scala",
+                     font=("Segoe UI", 10, "bold"),
+                     bg="#3D1A00", fg=C_WARNING).pack(anchor="w")
+            tk.Label(err, text=sync.get("error", "Error desconocido."),
+                     font=("Segoe UI", 9), bg="#3D1A00", fg="#FFD580",
+                     wraplength=680, justify="left").pack(anchor="w", pady=(4, 0))
+            return
+
+        for w in self._resultado_frame.winfo_children():
+            w.destroy()
+        tk.Label(self._resultado_frame, text="Consultando a Prolog...",
+                 font=("Segoe UI", 10, "italic"),
+                 bg=C_DARK, fg=C_TEXT_MUT).pack(anchor="w", pady=6)
+        self.update_idletasks()
+
+        resultado = validar_seleccion_manual(codigos)
+
+        for w in self._resultado_frame.winfo_children():
+            w.destroy()
+
+        if not resultado.get("ok"):
+            err = tk.Frame(self._resultado_frame, bg="#3D1A00", padx=16, pady=12)
+            err.pack(fill="x", pady=6)
+            tk.Label(err, text="⚠️  No se pudo validar con Prolog",
+                     font=("Segoe UI", 10, "bold"),
+                     bg="#3D1A00", fg=C_WARNING).pack(anchor="w")
+            tk.Label(err, text=resultado.get("error", "Error desconocido."),
+                     font=("Segoe UI", 9), bg="#3D1A00", fg="#FFD580",
+                     wraplength=680, justify="left").pack(anchor="w", pady=(4, 0))
+            return
+
+        if resultado["valida"]:
+            ok_box = tk.Frame(self._resultado_frame, bg="#0F3D1A", padx=16, pady=14)
+            ok_box.pack(fill="x", pady=6)
+            tk.Label(ok_box, text="✅  ¡Tu selección es válida! No hay cruces de horario.",
+                     font=("Segoe UI", 11, "bold"),
+                     bg="#0F3D1A", fg=C_SUCCESS).pack(anchor="w")
+            for item in detalle_seleccion:
+                tk.Label(ok_box,
+                         text=f"  • {item['curso']} — Sec. {item['seccion']} ({item['docente']})",
+                         font=("Segoe UI", 9), bg="#0F3D1A", fg="#A8E6B8").pack(anchor="w")
+
+            BotonUTP(self._resultado_frame, "💾 Guardar esta selección",
+                     lambda: self._guardar_seleccion(detalle_seleccion),
+                     ancho=220, alto=38, bg=C_DARK).pack(anchor="w", pady=(10, 0))
+        else:
+            bad_box = tk.Frame(self._resultado_frame, bg="#3D1A00", padx=16, pady=14)
+            bad_box.pack(fill="x", pady=6)
+            n = len(resultado["conflictos"])
+            tk.Label(bad_box,
+                     text=f"❌  Se encontraron {n} conflicto(s) de horario:",
+                     font=("Segoe UI", 11, "bold"),
+                     bg="#3D1A00", fg=C_WARNING).pack(anchor="w")
+            for conflicto in resultado["conflictos"]:
+                tk.Label(bad_box, text=f"  • {conflicto}",
+                         font=("Segoe UI", 9), bg="#3D1A00", fg="#FFD580",
+                         wraplength=680, justify="left").pack(anchor="w", pady=2)
+
+    def _guardar_seleccion(self, detalle_seleccion):
+        # Reconstruye self.app.cursos solo con las secciones elegidas
+        cursos_filtrados = []
+        for curso in self.app.cursos:
+            elegido = next(
+                (d for d in detalle_seleccion if d["curso"] == curso["nombre"]), None
+            )
+            if not elegido:
+                continue
+            sec_obj = next(
+                (s for s in curso.get("secciones", [])
+                 if s["codigo"] == elegido["seccion"]), None
+            )
+            if sec_obj:
+                cursos_filtrados.append({
+                    "nombre": curso["nombre"],
+                    "secciones": [sec_obj]
+                })
+
+        secciones_elegidas = [
+            curso["secciones"][0]
+            for curso in cursos_filtrados
+            if curso.get("secciones")
+        ]
+        prefs = cargar_preferencias()
+        if not cumple_restricciones_preferencias(secciones_elegidas, prefs):
+            messagebox.showwarning(
+                "No permitido por preferencias",
+                "Esta selección no respeta el turno o los días libres configurados."
+            )
+            return
+
+        self.app.cursos = cursos_filtrados
+        self.app.guardar_cursos()
+        messagebox.showinfo("Guardado",
+                            "✅ Tu horario manual fue guardado como horario activo.\n"
+                            "Puedes verlo en 'Ver Horario' o 'Tabla Semanal'.")
+        self.app.ir_a("horario")
+
 class PantallaPreferencias(tk.Frame):
     """
     Permite al usuario configurar su turno preferido y dias libres

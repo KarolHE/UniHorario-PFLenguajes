@@ -128,56 +128,77 @@ def cargar_combinaciones_guardadas() -> list:
         except Exception:
             pass
     return []
-def validar_seleccion_manual(codigos_secciones: list) -> dict:
+def validar_seleccion_manual(codigos_secciones: list, timeout: int = 15) -> dict:
     """
-    Valida una selección manual de secciones (una por curso) contra restricciones.pl.
-    codigos_secciones: ej. ['35671', '40012']
+    Recibe una lista de códigos de sección (strings), por ejemplo:
+    ["sec_101", "sec_205", "sec_310"]
+
+    Construye dinámicamente la consulta Prolog y la ejecuta sobre
+    consultas.pl usando el predicado validar_seleccion_resultado/2.
+
     Retorna:
-      {"ok": True, "valida": True, "conflictos": []}
-      {"ok": True, "valida": False, "conflictos": ["Conflicto: ...", ...]}
+      {"ok": True, "valida": bool, "conflictos": [str, ...]}
+      o
       {"ok": False, "error": "..."}
     """
+    if not codigos_secciones:
+        return {"ok": False, "error": "No se seleccionó ninguna sección."}
+
     if not _prolog_disponible():
-        return {"ok": False, "error": (
-            "SWI-Prolog no está instalado. "
-            "Descárgalo en https://www.swi-prolog.org/Download.html"
-        )}
+        return {
+            "ok": False,
+            "error": (
+                "SWI-Prolog no está instalado. "
+                "Descárgalo en https://www.swi-prolog.org/Download.html"
+            )
+        }
 
-    if not os.path.exists(HECHOS_PL) or os.path.getsize(HECHOS_PL) == 0:
-        return {"ok": False, "error": (
-            "hechos.pl está vacío. Corre primero el exportador de Scala "
-            "(ExportadorProlog) para generar los hechos desde tus cursos."
-        )}
+    if not os.path.exists(HECHOS_PL):
+        return {
+            "ok": False,
+            "error": "hechos.pl no encontrado. Primero exporta los datos desde Scala."
+        }
 
-    restricciones_pl = os.path.join(PROLOG_DIR, "restricciones.pl")
-    if not os.path.exists(restricciones_pl):
-        return {"ok": False, "error": "restricciones.pl no encontrado en prolog/."}
-
-    if len(codigos_secciones) < 2:
-        return {"ok": True, "valida": True, "conflictos": []}
-
-    hechos_path = HECHOS_PL.replace("\\", "/")  # evita romper el string en Windows
+    # Construir la lista Prolog ['sec_101','sec_205',...]
+    # Los códigos vienen como atoms (strings entre comillas simples)
     lista_pl = "[" + ",".join(f"'{c}'" for c in codigos_secciones) + "]"
-    goal = f"consult('{hechos_path}'), validar_seleccion({lista_pl})"
+
+    # Consulta que ejecuta la validación y emite el resultado como JSON
+    # usando format/2 con escape manual (sin librerías externas de Prolog).
+    consulta = (
+        f"validar_seleccion_resultado({lista_pl}, resultado(Valida, Conflictos)), "
+        f"atomic_list_concat(Conflictos, '||', ConflictosTexto), "
+        f"format('VALIDA:~w~nCONFLICTOS:~w~n', [Valida, ConflictosTexto])"
+    )
 
     try:
         resultado = subprocess.run(
-            ["swipl", "-g", goal, "-g", "halt", restricciones_pl],
-            capture_output=True, text=True, timeout=15, cwd=PROLOG_DIR
+            ["swipl", "-g", consulta, "-g", "halt", CONSULTAS_PL],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=PROLOG_DIR
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "Prolog tardó demasiado validando la selección."}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+    if resultado.returncode != 0:
+        err = resultado.stderr.strip() or "Error desconocido en Prolog."
+        return {"ok": False, "error": err}
+
     salida = resultado.stdout.strip()
-    if resultado.returncode != 0 and not salida:
-        return {"ok": False, "error": resultado.stderr.strip() or "Error desconocido en Prolog."}
 
-    lineas = [l for l in salida.splitlines() if l.strip()]
-    if not lineas:
-        return {"ok": False, "error": "Prolog no devolvió resultado."}
+    # Parsear la salida con formato VALIDA:<true|false>\nCONFLICTOS:<a||b||c>
+    m_valida = re.search(r"VALIDA:(true|false)", salida)
+    m_conf   = re.search(r"CONFLICTOS:(.*)", salida)
 
-    if lineas[0] == "OK":
-        return {"ok": True, "valida": True, "conflictos": []}
-    return {"ok": True, "valida": False, "conflictos": lineas[1:]}
+    if not m_valida:
+        return {"ok": False, "error": f"No se pudo interpretar la respuesta de Prolog: {salida}"}
+
+    valida = m_valida.group(1) == "true"
+    conflictos_texto = m_conf.group(1).strip() if m_conf else ""
+    conflictos = [c for c in conflictos_texto.split("||") if c] if conflictos_texto else []
+
+    return {"ok": True, "valida": valida, "conflictos": conflictos}

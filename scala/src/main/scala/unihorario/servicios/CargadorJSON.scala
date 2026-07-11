@@ -10,10 +10,24 @@ import scala.util.{Try, Using}
 
 object CargadorJSON {
 
-  // Decoders: convierten JSON de vuelta a modelos
-  implicit val decoderBloque:  Decoder[BloqueHorario] = deriveDecoder
-  implicit val decoderSeccion: Decoder[Seccion]        = deriveDecoder
-  implicit val decoderCurso:   Decoder[Curso]          = deriveDecoder
+  // ── Decoder manual de BloqueHorario (Fix Avance 2) ──────────────
+  // Python (consola.py) guarda los campos como "inicio" / "fin",
+  // mientras que el modelo Scala internamente usa horaInicio/horaFin.
+  // Este decoder acepta AMBOS formatos para no romper compatibilidad,
+  // probando primero "inicio"/"fin" (formato real de Python) y luego
+  // "horaInicio"/"horaFin" como respaldo.
+  implicit val decoderBloque: Decoder[BloqueHorario] = Decoder.instance { c =>
+    for {
+      dia        <- c.downField("dia").as[String]
+      horaInicio <- c.downField("inicio").as[String]
+                      .orElse(c.downField("horaInicio").as[String])
+      horaFin    <- c.downField("fin").as[String]
+                      .orElse(c.downField("horaFin").as[String])
+    } yield BloqueHorario(dia, horaInicio, horaFin)
+  }
+
+  implicit val decoderSeccion: Decoder[Seccion] = deriveDecoder
+  implicit val decoderCurso:   Decoder[Curso]   = deriveDecoder
 
   def cargar(ruta: String = "data/cursos_ingresados.json"): Either[String, List[Curso]] = {
     val contenido = Using(Source.fromFile(ruta))(_.mkString)

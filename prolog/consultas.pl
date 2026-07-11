@@ -5,6 +5,7 @@
 %            combinador.pl
 % ============================================================
 
+:- ensure_loaded(hechos).
 :- ensure_loaded(restricciones).
 :- ensure_loaded(combinador).
 
@@ -52,3 +53,50 @@ resumen_sistema :-
     format("  Secciones totales   : ~w~n", [NSecciones]),
     format("  Bloques horarios    : ~w~n", [NHorarios]),
     format("=====================================~n").
+
+% ============================================================
+%  VALIDACIÓN MANUAL (Mejora 4 — Avance 2)
+%  El estudiante elige una sección por curso desde la UI.
+%  Esta consulta verifica si la selección es válida y, de no
+%  serlo, devuelve el detalle de cada par de secciones en conflicto.
+% ============================================================
+
+% Lista de pares de secciones que chocan dentro de una selección dada.
+conflictos_en_seleccion([], []).
+conflictos_en_seleccion([Sec | Resto], Conflictos) :-
+    findall(
+        par(Sec, Otra),
+        (member(Otra, Resto), secciones_chocan(Sec, Otra)),
+        ConflictosAqui
+    ),
+    conflictos_en_seleccion(Resto, ConflictosResto),
+    append(ConflictosAqui, ConflictosResto, Conflictos).
+
+% Punto de entrada llamado desde Python (prolog_bridge.py).
+% Recibe la lista de codigos de seccion elegidos por el usuario,
+% vía variable de entorno o argumento, y escribe el resultado en JSON
+% por salida estándar para que Python lo capture.
+validar_seleccion(Secciones, Valida, Conflictos) :-
+    conflictos_en_seleccion(Secciones, Conflictos),
+    ( Conflictos == [] -> Valida = true ; Valida = false ).
+
+% Formatea un conflicto par(SecA, SecB) como texto legible con motivo.
+formatear_conflicto(par(SecA, SecB), Texto) :-
+    seccion(SecA, CursoA, DocenteA),
+    seccion(SecB, CursoB, DocenteB),
+    horario(SecA, Dia, IniA, FinA),
+    horario(SecB, Dia, IniB, FinB),
+    bloques_solapan(Dia, IniA, FinA, Dia, IniB, FinB),
+    !,
+    format(atom(Texto),
+           "~w (~w, ~w) choca con ~w (~w, ~w) el ~w de ~w a ~w",
+           [SecA, CursoA, DocenteA, SecB, CursoB, DocenteB, Dia, IniA, FinA]).
+formatear_conflicto(par(SecA, SecB), Texto) :-
+    format(atom(Texto), "~w choca con ~w", [SecA, SecB]).
+
+% Consulta principal expuesta a Python: recibe lista de secciones
+% (atoms) ya parseada por el bridge y devuelve un termino Prolog
+% que el bridge convierte a JSON antes de imprimirlo en stdout.
+validar_seleccion_resultado(Secciones, resultado(Valida, TextosConflictos)) :-
+    validar_seleccion(Secciones, Valida, Conflictos),
+    maplist(formatear_conflicto, Conflictos, TextosConflictos).
