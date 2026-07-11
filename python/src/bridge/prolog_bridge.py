@@ -128,3 +128,56 @@ def cargar_combinaciones_guardadas() -> list:
         except Exception:
             pass
     return []
+def validar_seleccion_manual(codigos_secciones: list) -> dict:
+    """
+    Valida una selección manual de secciones (una por curso) contra restricciones.pl.
+    codigos_secciones: ej. ['35671', '40012']
+    Retorna:
+      {"ok": True, "valida": True, "conflictos": []}
+      {"ok": True, "valida": False, "conflictos": ["Conflicto: ...", ...]}
+      {"ok": False, "error": "..."}
+    """
+    if not _prolog_disponible():
+        return {"ok": False, "error": (
+            "SWI-Prolog no está instalado. "
+            "Descárgalo en https://www.swi-prolog.org/Download.html"
+        )}
+
+    if not os.path.exists(HECHOS_PL) or os.path.getsize(HECHOS_PL) == 0:
+        return {"ok": False, "error": (
+            "hechos.pl está vacío. Corre primero el exportador de Scala "
+            "(ExportadorProlog) para generar los hechos desde tus cursos."
+        )}
+
+    restricciones_pl = os.path.join(PROLOG_DIR, "restricciones.pl")
+    if not os.path.exists(restricciones_pl):
+        return {"ok": False, "error": "restricciones.pl no encontrado en prolog/."}
+
+    if len(codigos_secciones) < 2:
+        return {"ok": True, "valida": True, "conflictos": []}
+
+    hechos_path = HECHOS_PL.replace("\\", "/")  # evita romper el string en Windows
+    lista_pl = "[" + ",".join(f"'{c}'" for c in codigos_secciones) + "]"
+    goal = f"consult('{hechos_path}'), validar_seleccion({lista_pl})"
+
+    try:
+        resultado = subprocess.run(
+            ["swipl", "-g", goal, "-g", "halt", restricciones_pl],
+            capture_output=True, text=True, timeout=15, cwd=PROLOG_DIR
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Prolog tardó demasiado validando la selección."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    salida = resultado.stdout.strip()
+    if resultado.returncode != 0 and not salida:
+        return {"ok": False, "error": resultado.stderr.strip() or "Error desconocido en Prolog."}
+
+    lineas = [l for l in salida.splitlines() if l.strip()]
+    if not lineas:
+        return {"ok": False, "error": "Prolog no devolvió resultado."}
+
+    if lineas[0] == "OK":
+        return {"ok": True, "valida": True, "conflictos": []}
+    return {"ok": True, "valida": False, "conflictos": lineas[1:]}

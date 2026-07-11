@@ -294,16 +294,7 @@ def rankear(combinaciones: List[List[Dict]],
             }
         })
 
-<<<<<<< HEAD
-    # Ordenar de mayor a menor puntaje
-    resultados.sort(
-        key=lambda x: x["puntaje"], 
-        reverse=True)
-
-    # Reasignar posiciones tras el ordenamiento
-=======
     resultados.sort(key=lambda x: x["puntaje"], reverse=True)
->>>>>>> origin/Caleb
     for i, r in enumerate(resultados):
         r["posicion"] = i + 1
 
