@@ -128,3 +128,85 @@ def cargar_combinaciones_guardadas() -> list:
         except Exception:
             pass
     return []
+
+
+# ============================================================
+#  VALIDACIÓN MANUAL  (Mejora 4 — Avance 2)
+#  El estudiante elige una sección por curso desde la UI y
+#  Prolog responde si la combinación tiene conflictos.
+# ============================================================
+
+def validar_seleccion_manual(codigos_secciones: list, timeout: int = 15) -> dict:
+    """
+    Recibe una lista de códigos de sección (strings), por ejemplo:
+    ["sec_101", "sec_205", "sec_310"]
+
+    Construye dinámicamente la consulta Prolog y la ejecuta sobre
+    consultas.pl usando el predicado validar_seleccion_resultado/2.
+
+    Retorna:
+      {"ok": True, "valida": bool, "conflictos": [str, ...]}
+      o
+      {"ok": False, "error": "..."}
+    """
+    if not codigos_secciones:
+        return {"ok": False, "error": "No se seleccionó ninguna sección."}
+
+    if not _prolog_disponible():
+        return {
+            "ok": False,
+            "error": (
+                "SWI-Prolog no está instalado. "
+                "Descárgalo en https://www.swi-prolog.org/Download.html"
+            )
+        }
+
+    if not os.path.exists(HECHOS_PL):
+        return {
+            "ok": False,
+            "error": "hechos.pl no encontrado. Primero exporta los datos desde Scala."
+        }
+
+    # Construir la lista Prolog ['sec_101','sec_205',...]
+    # Los códigos vienen como atoms (strings entre comillas simples)
+    lista_pl = "[" + ",".join(f"'{c}'" for c in codigos_secciones) + "]"
+
+    # Consulta que ejecuta la validación y emite el resultado como JSON
+    # usando format/2 con escape manual (sin librerías externas de Prolog).
+    consulta = (
+        f"validar_seleccion_resultado({lista_pl}, resultado(Valida, Conflictos)), "
+        f"atomic_list_concat(Conflictos, '||', ConflictosTexto), "
+        f"format('VALIDA:~w~nCONFLICTOS:~w~n', [Valida, ConflictosTexto])"
+    )
+
+    try:
+        resultado = subprocess.run(
+            ["swipl", "-g", consulta, "-g", "halt", CONSULTAS_PL],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=PROLOG_DIR
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Prolog tardó demasiado validando la selección."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    if resultado.returncode != 0:
+        err = resultado.stderr.strip() or "Error desconocido en Prolog."
+        return {"ok": False, "error": err}
+
+    salida = resultado.stdout.strip()
+
+    # Parsear la salida con formato VALIDA:<true|false>\nCONFLICTOS:<a||b||c>
+    m_valida = re.search(r"VALIDA:(true|false)", salida)
+    m_conf   = re.search(r"CONFLICTOS:(.*)", salida)
+
+    if not m_valida:
+        return {"ok": False, "error": f"No se pudo interpretar la respuesta de Prolog: {salida}"}
+
+    valida = m_valida.group(1) == "true"
+    conflictos_texto = m_conf.group(1).strip() if m_conf else ""
+    conflictos = [c for c in conflictos_texto.split("||") if c] if conflictos_texto else []
+
+    return {"ok": True, "valida": valida, "conflictos": conflictos}
