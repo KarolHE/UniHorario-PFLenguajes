@@ -42,3 +42,14 @@ combinacion_valida([_]).
 combinacion_valida([Sec | Resto]) :-
     \+ (member(Otra, Resto), secciones_chocan(Sec, Otra)),
     combinacion_valida(Resto).
+
+validar_seleccion(Lista) :-
+    findall(A-B,
+            ( member(A, Lista), member(B, Lista), A @< B, secciones_chocan(A, B) ),
+            Pares),
+    ( Pares == [] ->
+        format("OK~n")
+    ;
+        format("CONFLICTO~n"),
+        forall(member(A-B, Pares), explicar_conflicto(A, B))
+    ).
